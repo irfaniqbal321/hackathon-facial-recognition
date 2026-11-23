@@ -1,7 +1,8 @@
-opencv-python-headless
+opencv-contrib-python
 numpy
 Pillow
 streamlit
 deepface
 pandas
 tf-keras
+
