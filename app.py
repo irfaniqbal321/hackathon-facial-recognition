@@ -19,15 +19,12 @@ os.makedirs(DB_PATH, exist_ok=True)
 if not os.path.exists(ATTENDANCE_FILE):
     pd.DataFrame(columns=["Name","Date","Time"]).to_csv(ATTENDANCE_FILE, index=False)
 
-# --- FIX 1: Cascade file ko download karo agar na ho ---
 def get_cascade():
-    # pehle opencv wala path try karo
     path = os.path.join(cv2.data.haarcascades, CASCADE_FILE)
     if os.path.exists(path):
         c = cv2.CascadeClassifier(path)
         if not c.empty():
             return c
-    # agar fail ho to local download karo
     if not os.path.exists(CASCADE_FILE):
         try:
             st.warning("Haarcascade download ho raha hai... 1 baar wait karo")
@@ -73,7 +70,18 @@ def train_model():
 if menu == "Enroll New Face":
     st.header("📸 Enroll New Face")
     name = st.text_input("Name", value="m.irfan")
-    uploaded = st.file_uploader("Apni 5-6 photos upload karo", accept_multiple_files=True, type=['jpg','jpeg','png'])
+    
+    # Yahan Camera + Upload dono laga diye
+    enroll_option = st.radio("Kaise enroll karna hai?", ["Upload Photo", "Camera se lo"])
+    
+    uploaded = []
+    if enroll_option == "Upload Photo":
+        uploaded = st.file_uploader("Apni 5-6 photos upload karo", accept_multiple_files=True, type=['jpg','jpeg','png'])
+    else:
+        cam_photo = st.camera_input("Apni photo lo")
+        if cam_photo is not None:
+            uploaded = [cam_photo]
+
     if uploaded and name:
         person_dir = os.path.join(DB_PATH, name)
         os.makedirs(person_dir, exist_ok=True)
@@ -82,7 +90,7 @@ if menu == "Enroll New Face":
             try:
                 pil_img = Image.open(file).convert("L")
                 pil_img = pil_img.resize((200,200))
-                pil_img.save(os.path.join(person_dir, f"img_{saved}_{file.name}.jpg"))
+                pil_img.save(os.path.join(person_dir, f"img_{saved}_{file.name if hasattr(file, 'name') else 'cam'}.jpg"))
                 saved += 1
             except:
                 pass
@@ -90,37 +98,33 @@ if menu == "Enroll New Face":
         if saved>0:
             train_model()
 
-# ============ LIVE RECOGNITION ============
+# ============ LIVE RECOGNITION - AB CAMERA_INPUT WALA ============
 elif menu == "Live Recognition":
-    st.header("🎥 Live Recognition")
-    if face_cascade.empty():
-        st.error("Cascade file load nahi hua, dubara refresh karo")
-    else:
-        st.info(f"Cascade OK! Total persons: {len(os.listdir(DB_PATH))}")
-    
-    if st.button("Train & Start Camera"):
+    st.header("🎥 Live Recognition - Camera Input")
+    st.info(f"Cascade OK! Total persons: {len(os.listdir(DB_PATH))}")
+
+    # YAHI MAIN CHANGE HAI - VideoCapture hata diya
+    camera_image = st.camera_input("Camera se apni photo lo")
+
+    if camera_image is not None:
         label_map = train_model()
         if not label_map:
             st.error("Pehle Enroll karo! face_db khali hai")
         else:
             inv_map = {v:k for k,v in label_map.items()}
             st.success(f"Model Trained! Persons: {list(label_map.keys())}")
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(1)
+
+            # Photo ko OpenCV me convert karo
+            pil_img = Image.open(camera_image)
+            img_array = np.array(pil_img.convert("RGB"))
+            frame = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
             
-            FRAME = st.empty()
-            st.write("Camera chal raha hai... Stop karne ke liye page refresh karo")
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None: 
-                    continue
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                if gray is None or gray.size == 0:
-                    continue
-                
-                faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            if len(faces) == 0:
+                st.warning("Koi face nahi mila! Dobara photo lo, roshni me munh seedha rakho")
+            else:
                 for (x,y,w,h) in faces:
                     roi = cv2.resize(gray[y:y+h, x:x+w], (200,200))
                     try:
@@ -133,14 +137,18 @@ elif menu == "Live Recognition":
                             today = now.strftime("%Y-%m-%d")
                             if not ((df['Name']==name) & (df['Date']==today)).any():
                                 pd.DataFrame([[name, today, now.strftime("%H:%M:%S")]], columns=["Name","Date","Time"]).to_csv(ATTENDANCE_FILE, mode='a', header=False, index=False)
+                                st.success(f"Attendance lag gayi: {name}")
+                            else:
+                                st.info(f"{name} ki attendance pehle se lagi hui hai")
                         else:
                             name = "Unknown"
                             color = (0,0,255)
                         cv2.rectangle(frame, (x,y), (x+w, y+h), color, 2)
                         cv2.putText(frame, f"{name} {conf:.0f}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-                    except:
-                        pass
-                FRAME.image(frame, channels="BGR")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            
+            st.image(frame, channels="BGR", caption="Result")
 
 # ============ ATTENDANCE LOG ============
 elif menu == "Attendance Log":
